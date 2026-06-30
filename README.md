@@ -382,6 +382,6 @@ If you found this project useful, consider giving it a ⭐ on GitHub.
 
 ## Made with ❤️ using React, Node.js, MongoDB and Gemini AI
 
-**DocuMind © 2026**
+**DocStorium © 2026**
 
 </div>
