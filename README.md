@@ -144,13 +144,13 @@ Whether you're a student, researcher, or professional, DocuMind helps reduce man
 * Mammoth
 * PDF Parse
 
----
+----
 
 ## AI
 
 * Google Gemini 2.5 Flash
 
----
+----
 
 ## Deployment
 
