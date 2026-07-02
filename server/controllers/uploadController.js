@@ -1,0 +1,640 @@
+import Activity from "../models/Activity.js";
+import Document from "../models/Document.js";
+import Collection from "../models/Collection.js"; // <-- ADD THIS IMPORT
+import cloudinary from "../config/cloudinary.js"; 
+import SearchHistory
+from "../models/SearchHistory.js";
+
+// ─── UPLOAD DOCUMENT ───
+export const uploadDocument = async (req, res) => {
+  try {
+    console.log("\n=== 🚀 NEW UPLOAD INITIATED ===");
+    console.log("👤 User ID:", req.user?.id);
+
+    if (!req.file) {
+      console.log("❌ ERROR: req.file is undefined. Multer or Cloudinary rejected the stream.");
+      return res.status(400).json({ message: "No file uploaded" });
+    }
+    
+
+
+    const fileUrl = req.file.path || req.file.secure_url;
+    const publicId = req.file.filename || req.file.public_id;
+
+    if (!fileUrl || !publicId) {
+      return res.status(500).json({ message: "Cloudinary payload missing URL or ID." });
+    }
+
+    const newDocument = await Document.create({
+      title: req.file.originalname || "Untitled Document",
+      fileUrl: fileUrl,
+      publicId: publicId,
+      fileType: req.file.mimetype || "application/octet-stream",
+      fileSize: req.file.size || 0,
+      uploadedBy: req.user.id, 
+    });
+   await Activity.create({
+ userId:req.user.id,
+ documentId:newDocument._id,
+ action:"uploaded",
+ documentName:newDocument.title,
+});
+
+    console.log("✅ SUCCESS! Saved to MongoDB:", newDocument._id);
+
+    res.status(201).json({
+      message: "Document uploaded successfully",
+      document: newDocument,
+    });
+  } catch (error) {
+    console.error("❌ MONGODB CRASH:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ─── STEP 6: GET ALL DOCUMENTS (WITH PAGINATION) ───
+export const getDocuments = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const totalDocuments = await Document.countDocuments({ uploadedBy: req.user.id });
+    
+   const documents =
+ await Document.find({
+  uploadedBy:req.user.id
+ })
+ .populate(
+   "uploadedBy",
+   "name email"
+ )
+ .sort({
+   createdAt:-1
+ })
+ .skip(skip)
+ .limit(limit);
+
+    res.status(200).json({
+      success: true,
+      documents,
+      currentPage: page,
+      totalPages: Math.ceil(totalDocuments / limit),
+      totalDocuments
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── STEP 5: SEARCH DOCUMENTS API ───
+export const searchDocuments = async (req, res) => {
+  try {
+    const { q } = req.query;
+    
+    // Prevent empty or space-only queries
+    if (!q || !q.trim()) {
+      return res.status(400).json({ success: false, message: "Search query 'q' is required" });
+    }
+
+    const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const terms = q.split(/\s+/).map((t) => t.trim()).filter(Boolean);
+
+    // CREATE AN $AND ARRAY SO EVERY WORD MUST MATCH SOMEWHERE
+    const andConditions = terms.map(term => {
+      const pattern = escapeRegExp(term);
+      return {
+        $or: [
+          { title: { $regex: pattern, $options: "i" } },
+          { summary: { $regex: pattern, $options: "i" } },
+          { tags: { $regex: pattern, $options: "i" } }
+        ]
+      };
+    });
+
+    // $and guarantees that searching "Q4 Report" only returns files containing BOTH words.
+    const documents = await Document.find({
+      uploadedBy: req.user.id,
+      $and: andConditions
+    })
+      .populate("uploadedBy", "name email")
+      .sort({ createdAt: -1 });
+
+    // Score documents based on which fields match any of the terms.
+    const scoredDocuments = documents.map((doc) => {
+      let score = 0;
+      const title = (doc.title || "").toLowerCase();
+      const summary = (doc.summary || "").toLowerCase();
+      const tagList = Array.isArray(doc.tags) ? doc.tags.map((t) => (t || "").toLowerCase()) : [];
+
+      for (const term of terms) {
+        const t = term.toLowerCase();
+        if (title.includes(t)) score += 50;
+        if (summary.includes(t)) score += 30;
+        if (tagList.some((tag) => tag.includes(t))) score += 20;
+      }
+
+      return {
+        ...doc.toObject(),
+        relevance: score,
+      };
+    });
+
+    scoredDocuments.sort((a, b) => b.relevance - a.relevance);
+
+    res.status(200).json({ success: true, documents: scoredDocuments });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── STEP 2: GET SINGLE DOCUMENT ───
+export const getDocumentById = async (req, res) => {
+  try {
+    const document = await Document.findOne({ 
+      _id: req.params.id, 
+      uploadedBy: req.user.id 
+    });
+
+    if (!document) {
+      return res.status(404).json({ success: false, message: "Document not found" });
+    }
+
+    res.status(200).json({ success: true, document });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── STEP 3: UPDATE DOCUMENT API ───
+export const updateDocument = async (req, res) => {
+  try {
+    const { title, tags, summary } = req.body;
+
+   const document = await Document.findOneAndUpdate(
+    { _id: req.params.id, uploadedBy: req.user.id },
+    { $set: { title, tags, summary } },
+    {
+      returnDocument: "after",
+      runValidators: true,
+    }
+  );
+
+    if (!document) {
+      return res.status(404).json({ success: false, message: "Document not found or unauthorized" });
+    }
+   await Activity.create({
+ userId:req.user.id,
+ documentId:document._id,
+ action:"edited",
+ documentName:document.title,
+});
+
+    res.status(200).json({ success: true, message: "Document updated successfully", document });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── STEP 1: DELETE DOCUMENT ───
+export const deleteDocument = async (req, res) => {
+  try {
+    const document = await Document.findOne({ 
+      _id: req.params.id, 
+      uploadedBy: req.user.id 
+    });
+
+    if (!document) {
+      return res.status(404).json({ success: false, message: "Document not found or unauthorized" });
+    }
+
+    const resourceType = (document.fileType.includes("word") || document.fileType.includes("text")) ? "raw" : "image";
+
+    // 1. Delete the physical file from Cloudinary
+    await cloudinary.uploader.destroy(document.publicId, { resource_type: resourceType });
+    
+    // 2. CASCADING DELETE: Remove document ID from all Collections
+    await Collection.updateMany(
+      { documents: document._id },
+      { $pull: { documents: document._id } }
+    );
+
+    // 3. CASCADING DELETE: Wipe all previous activity logs for this document
+    // This prevents the Activity Feed from crashing when trying to load a deleted file
+    await Activity.deleteMany({ documentId: document._id });
+
+    // 4. Log the deletion activity (we intentionally leave documentId out since it's gone)
+    await Activity.create({
+      userId: req.user.id,
+      action: "deleted",
+      documentName: document.title,
+    });
+
+    // 5. Finally, delete the document record from the database
+    await Document.findByIdAndDelete(document._id);
+
+    res.status(200).json({ success: true, message: "Document and all related data deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+export const toggleStarDocument =
+async (req, res) => {
+
+ try {
+
+  const document =
+   await Document.findOne({
+    _id: req.params.id,
+    uploadedBy: req.user.id,
+   });
+
+  if (!document) {
+   return res.status(404).json({
+    success: false,
+    message: "Document not found",
+   });
+
+  }
+
+  document.starred =
+   !document.starred;
+
+  await document.save();
+ await Activity.create({
+ userId:req.user.id,
+ documentId:document._id,
+ action:"starred",
+ documentName:document.title,
+});
+
+  res.status(200).json({
+   success: true,
+   document,
+  });
+
+ } catch (error) {
+  res.status(500).json({
+   success: false,
+   message: error.message,
+  });
+
+ }
+
+};
+export const getSearchStats =
+async (req, res) => {
+
+ try {
+
+  const totalDocs =
+   await Document.countDocuments({
+    uploadedBy: req.user.id
+   });
+
+  const pdfs =
+   await Document.countDocuments({
+    uploadedBy: req.user.id,
+    fileType: {
+     $regex: "pdf",
+     $options: "i"
+    }
+   });
+   const summaries =
+ await Document.countDocuments({
+  uploadedBy:req.user.id,
+  summary:{
+   $ne:""
+  }
+ });
+
+  const docx =
+   await Document.countDocuments({
+    uploadedBy: req.user.id,
+    fileType: {
+     $regex: "word",
+     $options: "i"
+    }
+   });
+
+  const txt =
+   await Document.countDocuments({
+    uploadedBy: req.user.id,
+    fileType: {
+     $regex: "text",
+     $options: "i"
+    }
+   });
+
+  res.status(200).json({
+   success: true,
+   totalDocs,
+   pdfs,
+   docx,
+   txt,
+   summaries
+  });
+
+ } catch (error) {
+
+  res.status(500).json({
+   success: false,
+   message: error.message,
+  });
+
+ }
+
+};
+export const getCategories =
+async (req,res)=>{
+
+ try{
+
+  const documents =
+   await Document.find({
+    uploadedBy:req.user.id
+   });
+
+  let pdf = 0;
+  let docx = 0;
+  let txt = 0;
+
+  documents.forEach(doc=>{
+
+   if(
+    doc.fileType?.includes(
+      "pdf"
+    )
+   ){
+    pdf++;
+   }
+
+   else if(
+    doc.fileType?.includes(
+      "word"
+    )
+   ){
+    docx++;
+   }
+
+   else{
+    txt++;
+   }
+
+  });
+
+  res.json({
+   success:true,
+   categories:[
+    {
+     label:"PDF",
+     count:pdf
+    },
+    {
+     label:"DOCX",
+     count:docx
+    },
+    {
+     label:"TXT",
+     count:txt
+    }
+   ]
+  });
+
+ }
+ catch(error){
+
+  res.status(500).json({
+   success:false,
+   message:error.message
+  });
+
+ }
+
+};
+export const getDocumentsByType =
+async (req,res)=>{
+
+ try{
+
+  const { type } =
+   req.params;
+
+  let regex = "";
+
+if (type === "PDF") {
+ regex = "pdf";
+}
+
+else if (type === "DOCX") {
+ regex = "word";
+}
+
+else if (type === "TXT") {
+ regex = "text";
+}
+
+else if (type === "IMAGE") {
+ regex = "image";
+}
+
+const documents =
+ await Document.find({
+  uploadedBy: req.user.id,
+  fileType: {
+   $regex: regex,
+   $options: "i",
+  },
+ });
+
+  res.json({
+   success:true,
+   documents
+  });
+
+ }
+ catch(error){
+
+  res.status(500).json({
+   success:false,
+   message:error.message
+  });
+
+ }
+
+};
+export const getSuggestions =
+async (req,res)=>{
+
+ try{
+
+  const documents =
+   await Document.find({
+    uploadedBy:req.user.id
+   })
+   .limit(10);
+
+  const suggestions =
+   documents.map(
+    doc => doc.title
+   );
+
+  res.json({
+   success:true,
+   suggestions
+  });
+
+ }
+ catch(error){
+
+  res.status(500).json({
+   success:false,
+   message:error.message
+  });
+
+ }
+
+};
+export const saveSearchHistory =
+async (req,res)=>{
+
+ try{
+
+  const {
+   query,
+   resultsCount
+  } = req.body;
+
+  const history =
+   await SearchHistory.create({
+
+    userId:req.user.id,
+
+    query,
+
+    resultsCount
+
+   });
+
+  res.status(201).json({
+
+   success:true,
+   history
+
+  });
+
+ }
+ catch(error){
+
+  res.status(500).json({
+
+   success:false,
+   message:error.message
+
+  });
+
+ }
+
+};
+export const getSearchHistory =
+async (req,res)=>{
+
+ try{
+
+  const history =
+
+   await SearchHistory.find({
+
+    userId:req.user.id
+
+   })
+
+   .sort({
+    createdAt:-1
+   })
+
+   .limit(10);
+
+  res.json({
+
+   success:true,
+   history
+
+  });
+
+ }
+ catch(error){
+
+  res.status(500).json({
+
+   success:false,
+   message:error.message
+
+  });
+
+ }
+
+};
+export const clearSearchHistory =
+async (req,res)=>{
+
+ try{
+
+  await SearchHistory.deleteMany({
+
+   userId:req.user.id
+
+  });
+
+  res.json({
+
+   success:true
+
+  });
+
+ }
+ catch(error){
+
+  res.status(500).json({
+
+   success:false,
+   message:error.message
+
+  });
+
+ }
+
+};
+export const deleteSearchHistory =
+async (req,res)=>{
+
+ try{
+
+  await SearchHistory.findOneAndDelete({
+
+   _id:req.params.id,
+
+   userId:req.user.id
+
+  });
+
+  res.json({
+
+   success:true
+
+  });
+
+ }
+ catch(error){
+
+  res.status(500).json({
+
+   success:false,
+
+   message:error.message
+
+  });
+
+ }
+
+};

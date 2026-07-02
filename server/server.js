@@ -1,0 +1,104 @@
+// import dotenv from "dotenv";
+// dotenv.config({ path: "./.env" });
+import "./config/env.js";
+
+import express from "express";
+import cors from "cors";
+import passport from "passport"; // Imported passport
+import { initializePassport } from "./config/passport.js"; 
+import aiRoutes
+from "./routes/aiRoutes.js";
+import notificationRoutes
+from "./routes/notificationRoutes.js";
+import dashboardRoutes
+from "./routes/dashboardRoutes.js";
+import userRoutes
+from "./routes/userRoutes.js";
+import collectionRoutes from "./routes/collectionRoutes.js"; // Imported collection routes
+// Import the initialization function
+
+import connectDB from "./config/db.js";
+import authRoutes from "./routes/authRoutes.js";
+import uploadRoutes from "./routes/uploadRoutes.js";
+
+// Initialize passport strategies after env vars are loaded
+initializePassport();
+
+const app = express();
+
+// DATABASE CONNECTION
+
+
+// MIDDLEWARE
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      process.env.CLIENT_URL,
+    ],
+    credentials: true,
+  })
+);
+app.use(
+  express.json({
+    limit: "10mb",
+  })
+);
+app.use(passport.initialize()); // Initialized passport middleware
+
+// ROUTES
+app.use("/api/auth", authRoutes);
+app.use("/api/documents", uploadRoutes);
+app.use(
+  "/api/dashboard",
+  dashboardRoutes
+);
+app.use(
+  "/api/ai",
+  aiRoutes
+);
+app.use(
+ "/api/notifications",
+ notificationRoutes
+);
+app.use(
+  "/api/user",
+  userRoutes
+);
+app.use("/api/collections", collectionRoutes); // Mounted collection routes
+
+// TEST ROUTE
+app.get("/", (req, res) => {
+  res.send("🚀 DocuMind API Running");
+});
+
+// OAuth DEBUG ENDPOINT
+app.get("/api/auth/debug", (req, res) => {
+  res.json({
+    googleClientID: process.env.GOOGLE_CLIENT_ID ? "✅ Loaded" : "❌ Missing",
+    githubClientID: process.env.GITHUB_CLIENT_ID ? "✅ Loaded" : "❌ Missing",
+  });
+});
+
+const PORT = process.env.PORT || 5000;
+
+const startServer = async () => {
+  try {
+    await connectDB();
+
+    app.listen(PORT, () => {
+      console.log(`✅ Server running on port ${PORT}`);
+    });
+
+  } catch (error) {
+
+    console.error(
+      "Server Startup Failed:",
+      error
+    );
+
+    process.exit(1);
+  }
+};
+
+startServer();

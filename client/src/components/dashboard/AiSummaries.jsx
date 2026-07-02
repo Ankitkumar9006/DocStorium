@@ -1,0 +1,557 @@
+import ReactMarkdown from "react-markdown";
+import { toast } from "react-toastify";
+import {
+  useEffect,
+  useState,
+} from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  getSummaries,
+} from "../../services/aiService";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  FiZap, FiStar, FiEye, FiCopy,
+  FiChevronDown, FiChevronUp, FiClock, FiFileText,
+   FiArrowRight, FiCheck,
+  FiSearch, FiTrendingUp,
+} from "react-icons/fi";
+
+/* ─── Confidence Ring ─── */
+function ConfidenceRing({ value, color }) {
+  const r = 14, circ = 2 * Math.PI * r;
+  const offset = circ - (value / 100) * circ;
+  return (
+    <div className="relative w-9 h-9 shrink-0">
+      <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+        <circle cx="18" cy="18" r={r} fill="none" strokeWidth="3" stroke="rgba(255,255,255,0.05)" />
+        <motion.circle
+          cx="18" cy="18" r={r} fill="none" strokeWidth="3"
+          stroke={color} strokeLinecap="round"
+          strokeDasharray={circ}
+          initial={{ strokeDashoffset: circ }}
+          animate={{ strokeDashoffset: offset }}
+          transition={{ duration: 1.2, ease: "easeOut", delay: 0.4 }}
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-white">
+        {value}%
+      </span>
+    </div>
+  );
+}
+
+/* ─── Copy Button ─── */
+function CopyButton({ text, accent }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = (e) => {
+    e.stopPropagation();
+    navigator.clipboard?.writeText(text).catch(() => { });
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+  return (
+    <motion.button
+      whileHover={{ scale: 1.1 }}
+      whileTap={{ scale: 0.92 }}
+      onClick={handleCopy}
+      className="w-7 h-7 rounded-lg bg-white/5 border border-white/[0.07] flex items-center justify-center transition-all duration-200 hover:bg-white/10"
+    >
+      <AnimatePresence mode="wait">
+        {copied
+          ? <motion.span key="check" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}><FiCheck className="text-emerald-400 text-xs" /></motion.span>
+          : <motion.span key="copy" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}><FiCopy className="text-gray-500 text-xs" /></motion.span>
+        }
+      </AnimatePresence>
+    </motion.button>
+  );
+}
+
+/* ─── Summary Card ─── */
+function SummaryCard({ summary, index }) {
+  const [hovered, setHovered] = useState(false);
+  const [starred, setStarred] = useState(summary.starred);
+  const [expanded, setExpanded] = useState(false);
+
+  const truncLength = 350;
+  const insightText = summary.insight || "";
+  const isLong = insightText.length > truncLength;
+  
+  
+  return (
+    <motion.div
+      layout // Tracks height changes
+      initial={{ opacity: 0, y: 24, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.5, delay: index * 0.09, ease: [0.22, 1, 0.36, 1] }}
+      onMouseEnter={() => setHovered(true)}
+onMouseLeave={() => {
+  setHovered(false);
+}}      // Added 'break-inside-avoid w-full inline-block mb-4' for masonry layout
+      className="relative rounded-2xl border bg-[#111827] overflow-hidden transition-all duration-300 break-inside-avoid w-full inline-block mb-4"
+      style={{
+        borderColor: hovered ? summary.accentBorder : "rgba(31,41,55,1)",
+        boxShadow: hovered
+          ? `0 0 36px ${summary.accentDim}, 0 4px 20px rgba(0,0,0,0.3)`
+          : "0 2px 12px rgba(0,0,0,0.2)",
+      }}
+    >
+      {/* Top accent line */}
+      <motion.div
+        animate={{ scaleX: hovered ? 1 : 0, opacity: hovered ? 1 : 0 }}
+        transition={{ duration: 0.3 }}
+        className={`absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r ${summary.color} origin-left`}
+      />
+
+      {/* Corner glow */}
+      <motion.div
+        animate={{ opacity: hovered ? 1 : 0 }}
+        transition={{ duration: 0.35 }}
+        className="absolute -top-10 -right-10 w-36 h-36 rounded-full blur-[55px] pointer-events-none"
+        style={{ background: summary.accentDim }}
+      />
+
+      <motion.div layout className="relative z-10 p-5">
+
+        {/* Header */}
+        <motion.div layout className="flex items-start justify-between gap-3 mb-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <motion.div
+              animate={{ scale: hovered ? 1.08 : 1 }}
+              transition={{ duration: 0.25 }}
+              className={`w-9 h-9 rounded-xl bg-gradient-to-br ${summary.color} flex items-center justify-center text-white text-sm shrink-0`}
+            >
+              <FiFileText />
+            </motion.div>
+
+            <div className="min-w-0">
+              <p className={`text-white text-sm font-semibold truncate transition-colors duration-200 ${hovered ? summary.accentText : ""}`}>
+                {summary.title}
+              </p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="text-gray-600 text-[10px] truncate">{summary.file}</span>
+                <span className="text-gray-700 text-[10px]">·</span>
+                <span className="text-gray-600 text-[10px]">{summary.readTime}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right actions */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {summary.confidence !== null && (
+              <ConfidenceRing value={summary.confidence} color={summary.accent} />
+            )}
+            <motion.button
+              whileHover={{ scale: 1.15 }}
+              whileTap={{ scale: 0.9 }}
+              onClick={() => setStarred(!starred)}
+              className="w-7 h-7 rounded-lg bg-white/5 border border-white/[0.07] flex items-center justify-center transition-all duration-200 hover:bg-white/10"
+            >
+              <motion.div animate={{ scale: starred ? [1, 1.4, 1] : 1 }} transition={{ duration: 0.3 }}>
+                <FiStar className={`text-xs transition-colors ${starred ? "text-amber-400 fill-amber-400" : "text-gray-600"}`} style={{ fill: starred ? "#f59e0b" : "none" }} />
+              </motion.div>
+            </motion.button>
+          </div>
+        </motion.div>
+
+        {/* AI Badge */}
+        <motion.div layout className="flex items-center gap-2 mb-3">
+          <motion.div
+            animate={{ opacity: [1, 0.5, 1] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border bg-white/[0.03]"
+            style={{ borderColor: summary.accentBorder }}
+          >
+            <motion.div
+              animate={{ rotate: [0, 360] }}
+              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+            >
+              <FiZap className={`text-[10px] ${summary.accentText}`} />
+            </motion.div>
+            <span className={`text-[10px] font-semibold ${summary.accentText}`}>AI Summary</span>
+          </motion.div>
+
+          <span className="text-gray-700 text-[10px]">·</span>
+          <div className="flex items-center gap-1 text-gray-600 text-[10px]">
+            <FiClock className="text-[9px]" />
+            {summary.time}
+          </div>
+          <span className="text-gray-700 text-[10px]">·</span>
+          <div className="flex items-center gap-1 text-gray-600 text-[10px]">
+            <FiTrendingUp className="text-[9px]" />
+            {summary.keyPoints} insights
+          </div>
+        </motion.div>
+
+        {/* Insight text */}
+        <motion.div layout className="mb-3">
+          <AnimatePresence initial={false}>
+            <motion.div layout className="text-gray-400 text-xs leading-relaxed">
+              <div className="prose prose-invert max-w-none text-sm">
+                <ReactMarkdown>
+                  {expanded || !isLong ? insightText : insightText.slice(0, truncLength) + "..."}
+                </ReactMarkdown>
+              </div>
+            </motion.div>
+          </AnimatePresence>
+
+          {isLong && !expanded && (
+            <motion.button
+              layout
+              whileHover={{ x: 2 }}
+              onClick={() => setExpanded(true)}
+              className={`flex items-center gap-1 mt-1.5 text-[11px] font-medium ${summary.accentText} transition-colors`}
+            >
+              Read more <FiChevronDown className="text-[10px]" />
+            </motion.button>
+          )}
+        </motion.div>
+
+        {/* Key insights (expanded) */}
+        <AnimatePresence>
+          {expanded && (
+            <motion.div
+              layout
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.3 }}
+              className="mb-3 overflow-hidden"
+            >
+              <p className="text-[10px] text-gray-600 font-semibold uppercase tracking-widest mb-2 mt-2">Key Insights</p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {summary.keyInsights.map((point, i) => (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: i * 0.06 }}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border"
+                    style={{ background: summary.accentDim, borderColor: summary.accentBorder }}
+                  >
+                    <div className="w-1 h-1 rounded-full shrink-0" style={{ background: summary.accent }} />
+                    <span className={`text-[10px] font-medium ${summary.accentText} truncate`}>{point}</span>
+                  </motion.div>
+                ))}
+              </div>
+
+              {/* Show less button */}
+              <motion.button 
+                layout
+                whileHover={{ x: -2 }} 
+                onClick={() => setExpanded(false)}
+                className={`flex items-center gap-1 mt-4 text-[11px] font-medium ${summary.accentText} transition-colors`}
+              >
+                <FiChevronUp className="text-[10px]" /> Show less
+              </motion.button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Tags */}
+        <motion.div layout className="flex items-center gap-1.5 flex-wrap mb-4 mt-2">
+          {summary.tags.map((tag, i) => (
+            <motion.span
+              key={i}
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: index * 0.09 + 0.3 + i * 0.05 }}
+              whileHover={{ scale: 1.08 }}
+              className={`flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold border cursor-default ${summary.tagBg}`}
+            >
+              {tag}
+            </motion.span>
+          ))}
+        </motion.div>
+
+        {/* Footer actions (View Full removed) */}
+        <motion.div layout className="flex items-center justify-start pt-3 border-t border-white/[0.05]">
+          <div className="flex items-center gap-1.5">
+            <CopyButton text={summary.insight} accent={summary.accent} />
+          </div>
+        </motion.div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+/* ─── Filter Bar ─── */
+
+
+/* ─── Main Export ─── */
+export default function AiSummaries() {
+  const navigate = useNavigate();
+  const [summaries, setSummaries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const getTimeAgo = (date) => {
+
+  const diff =
+    Date.now() -
+    new Date(date).getTime();
+
+  const minutes =
+    Math.floor(diff / 60000);
+if (minutes <= 0)
+  return "Just now";
+
+if (minutes < 60)
+  return `${minutes}m ago`;
+
+  const hours =
+    Math.floor(minutes / 60);
+
+  if (hours < 24)
+    return `${hours}h ago`;
+
+  const days =
+    Math.floor(hours / 24);
+
+  return `${days}d ago`;
+
+};
+  
+ const fetchSummaries = async () => {
+
+  try {
+
+    
+
+    const data =
+      await getSummaries();
+
+    setSummaries(
+      data.documents.map((doc) => {
+
+        const words =
+          (doc.summary || "")
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean)
+            .length;
+
+        const readTime =
+          `${Math.max(
+            1,
+            Math.ceil(words / 200)
+          )} min read`;
+
+        return {
+          _id: doc._id || doc.id,
+
+          title:
+            doc.title ||
+            "Untitled Document",
+
+          insight:
+            doc.summary ||
+            "No summary available",
+
+          file:
+            doc.title ||
+            "Untitled Document",
+
+          readTime,
+
+          confidence: null,
+
+         keyPoints:
+  doc.summary
+    ?.split(".")
+    .filter(Boolean)
+    .length || 1,
+
+          createdAt:
+            doc.createdAt ||
+            new Date().toISOString(),
+
+          time:
+            getTimeAgo(
+              doc.createdAt
+            ),
+
+          starred: false,
+
+          tags:
+            doc.tags?.length
+              ? doc.tags
+              : ["AI"],
+
+          keyInsights: [
+            "AI Generated"
+          ],
+
+          color:
+            "from-purple-500 to-pink-600",
+
+          accent:
+            "#8b5cf6",
+
+          accentDim:
+            "rgba(139,92,246,0.1)",
+
+          accentBorder:
+            "rgba(139,92,246,0.2)",
+
+          accentText:
+            "text-purple-300",
+
+          tagBg:
+            "bg-purple-500/10 border-purple-500/20 text-purple-300",
+        };
+
+      })
+    );
+
+  } catch (error) {
+
+  console.error(error);
+  toast.error(
+ "Failed to load summaries"
+);
+
+  } finally {
+
+    setLoading(false);
+
+  }
+
+};
+  
+  useEffect(() => {
+  fetchSummaries();
+
+  const handleSummaryGenerated = () => {
+    fetchSummaries();
+  };
+
+  window.addEventListener(
+    "summaryGenerated",
+    handleSummaryGenerated
+  );
+
+  return () => {
+    window.removeEventListener(
+      "summaryGenerated",
+      handleSummaryGenerated
+    );
+  };
+}, []);
+
+  const filtered = summaries.filter((s) => {
+    const matchSearch =
+      searchQuery === "" ||
+      s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.insight || "")
+        .toLowerCase()
+        .includes(searchQuery.toLowerCase());
+
+    return matchSearch;
+  });
+
+  const latestSummaries = filtered
+    .slice()
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, 2);
+
+  return (
+    <div style={{ fontFamily: "'Poppins', sans-serif" }}>
+
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+className="
+flex
+flex-col
+sm:flex-row
+sm:items-center
+justify-between
+gap-3
+mb-4
+mt-8
+"      >
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 text-sm">
+            <FiZap />
+          </div>
+          <div>
+            <h2 className="text-white font-semibold text-sm">AI Summaries</h2>
+            <p className="text-gray-600 text-[10px]">{summaries.length} documents analyzed</p>
+          </div>
+          <motion.span
+            animate={{ opacity: [1, 0.4, 1] }}
+            transition={{ duration: 1.8, repeat: Infinity }}
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-300 text-[10px] font-semibold ml-1"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+            Live
+          </motion.span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Inline search */}
+          <motion.div
+            animate={{
+              borderColor: searchFocused ? "rgba(139,92,246,0.4)" : "rgba(31,41,55,1)",
+              boxShadow: searchFocused ? "0 0 0 3px rgba(139,92,246,0.06)" : "none",
+            }}
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl border bg-white/[0.03] text-xs"
+          >
+            <FiSearch className={`text-[11px] transition-colors ${searchFocused ? "text-purple-400" : "text-gray-600"}`} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
+              placeholder="Search summaries…"
+              className="bg-transparent text-white placeholder-gray-700 outline-none text-[11px] w-36"
+            />
+          </motion.div>
+
+         
+
+          <button
+            onClick={() => navigate("/dashboard/summaries")}
+            className="text-gray-500 hover:text-gray-300 text-xs transition-colors"
+          >
+            View all
+          </button>
+        </div>
+      </motion.div>
+
+      {/* Filter bar */}
+     
+
+      {/* Cards */}
+      <AnimatePresence mode="popLayout">
+        {latestSummaries.length > 0 ? (
+          <div className="columns-1 xl:columns-2 gap-4">
+            {latestSummaries.map((summary, index) => (
+              <SummaryCard
+                key={summary._id}
+                summary={summary}
+                index={index}
+              />
+            ))}
+          </div>
+        ) : (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            className="flex flex-col items-center justify-center py-16 rounded-2xl border border-[#1F2937] bg-[#111827]"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 text-xl mb-3">
+              <FiZap />
+            </div>
+            <p className="text-white font-medium text-sm mb-1">No summaries found</p>
+            <p className="text-gray-600 text-xs">Try a different filter or search term</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
